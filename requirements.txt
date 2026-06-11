@@ -1,0 +1,12 @@
+streamlit
+streamlit-quill
+groq
+python-dotenv
+beautifulsoup4
+bleach
+bcrypt
+pdfplumber
+pandas
+sqlalchemy
+fpdf2>=2.7.0
+    
