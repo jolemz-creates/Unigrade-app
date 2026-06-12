@@ -131,6 +131,10 @@ def init_session_defaults() -> None:
     st.session_state.setdefault("show_submission_summary", False)
     st.session_state.setdefault("current_question_index", 0)
 
+    # Phase 4 — Focus-loss detection (components/timer.py)
+    # Tracks wall-clock time of last timer render to detect rerun gaps.
+    st.session_state.setdefault("last_timer_render", 0.0)
+
     # §5.3 — Grading Dashboard (Lecturer)
     st.session_state.setdefault("selected_exam_id", None)
     st.session_state.setdefault("filter_flagged_only", False)
@@ -164,6 +168,7 @@ def clear_exam_session() -> None:
     st.session_state["current_question_index"] = 0
     st.session_state["last_autosave_time"] = 0.0
     st.session_state["time_remaining"] = 0
+    st.session_state["last_timer_render"] = 0.0  # Phase 4: reset focus-loss sentinel
 
 
 # ---------------------------------------------------------------------------

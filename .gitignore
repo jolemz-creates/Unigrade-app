@@ -1,0 +1,160 @@
+# =============================================================================
+# UniGrade — .gitignore
+# Derived from CLAUDE.md and ARCHITECT.md project specification.
+# =============================================================================
+
+
+# =============================================================================
+# SECRETS & ENVIRONMENT (CLAUDE.md §2 — never hardcode keys)
+# =============================================================================
+.env
+.env.*
+!.env.example
+
+
+# =============================================================================
+# DATABASE (CLAUDE.md §4.1 — runtime file, not source)
+# SQLite WAL mode produces two sidecar files alongside the main .db.
+# All three must be ignored or WAL transactions may be interrupted on checkout.
+# =============================================================================
+database/unigrade.db
+database/unigrade.db-wal
+database/unigrade.db-shm
+
+# Catch any temp test databases created in tests/tearDown
+*.db
+*.db-wal
+*.db-shm
+
+
+# =============================================================================
+# PYTHON RUNTIME
+# =============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+
+# Distribution / packaging
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+parts/
+var/
+sdist/
+develop-eggs/
+.installed.cfg
+lib/
+lib64/
+wheels/
+
+
+# =============================================================================
+# VIRTUAL ENVIRONMENTS
+# =============================================================================
+.venv/
+venv/
+env/
+ENV/
+.env/
+.conda/
+Pipfile.lock
+
+
+# =============================================================================
+# STREAMLIT (CLAUDE.md §2 — Frontend: Streamlit)
+# Streamlit writes local config and cache to .streamlit/
+# secrets.toml inside .streamlit/ may contain API keys — always ignored.
+# =============================================================================
+.streamlit/secrets.toml
+.streamlit/cache/
+
+# Keep .streamlit/config.toml in version control (theme, port settings)
+!.streamlit/config.toml
+
+
+# =============================================================================
+# TESTING & COVERAGE (CLAUDE.md §10 — TDD requirement)
+# pytest cache and coverage reports are generated artefacts, not source.
+# =============================================================================
+.pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+*.cover
+nosetests.xml
+test-results/
+
+
+# =============================================================================
+# PDF RESULT SLIPS (CLAUDE.md §10 Phase 3 — pdfplumber generation)
+# Generated result slips are runtime output, not source files.
+# =============================================================================
+*.pdf
+
+
+# =============================================================================
+# LOGS & AUDIT EXPORTS
+# The audit_log table lives in the DB (already ignored above).
+# Any flat-file exports of logs should not be committed.
+# =============================================================================
+*.log
+logs/
+audit_exports/
+
+
+# =============================================================================
+# IDE & EDITOR
+# The project is developed in VS Code (confirmed by error tracebacks).
+# =============================================================================
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# JetBrains (PyCharm etc.)
+.idea/
+*.iml
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+
+# =============================================================================
+# OPERATING SYSTEM
+# Developer is on Windows (confirmed by WinError 32 in test output).
+# =============================================================================
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# macOS (if collaborators join later)
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+
+# =============================================================================
+# GROQ / AI (CLAUDE.md §2 — AI Engine: Groq API)
+# Any cached or exported AI responses should stay local.
+# =============================================================================
+groq_cache/
+ai_responses/
+
+
+# =============================================================================
+# PHASE 4 SECURITY ARTEFACTS (CLAUDE.md §10 Phase 4)
+# Stress test result dumps and security audit reports are generated output.
+# =============================================================================
+stress_test_results/
+security_audit_report.*

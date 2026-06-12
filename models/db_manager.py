@@ -46,6 +46,16 @@ def get_connection() -> Iterator[sqlite3.Connection]:
         with get_connection() as conn:
             conn.execute(...)
 
+    PRAGMAs set on every connection:
+      - journal_mode=WAL     : Concurrent read/write without exclusive locks.
+      - foreign_keys=ON      : Enforce referential integrity on every write.
+      - busy_timeout=5000    : Wait up to 5 seconds when a write lock is held
+                               by another thread before raising OperationalError.
+                               Required for Phase 4 WAL stress test correctness —
+                               WAL mode alone does not queue concurrent writers;
+                               busy_timeout is what prevents "database is locked"
+                               errors under peak load (500 concurrent submissions).
+
     Behaviour:
       - Commits on clean exit from the `with` block.
       - Rolls back and re-raises on any exception inside the block.
@@ -60,6 +70,7 @@ def get_connection() -> Iterator[sqlite3.Connection]:
     conn.row_factory = sqlite3.Row  # Rows accessible by column name
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA foreign_keys=ON;")
+    conn.execute("PRAGMA busy_timeout=5000;")  # Phase 4: wait up to 5 s on write contention
     try:
         yield conn
         conn.commit()

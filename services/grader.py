@@ -19,6 +19,7 @@ fallback dict and are logged to audit_log — they never crash the caller.
 import asyncio
 import json
 import os
+import time
 from difflib import SequenceMatcher
 from typing import Any
 
@@ -29,6 +30,17 @@ from services.audit import log_to_audit
 from services.sanitizer import strip_html_tags
 
 load_dotenv()
+
+# ---------------------------------------------------------------------------
+# Retry configuration — Phase 4 rate-limit guard (CLAUDE.md §11 / Phase 4)
+# ---------------------------------------------------------------------------
+# Max attempts = 3. Delay before retry N = 2^N seconds:
+#   Attempt 0 → immediate (no prior failure)
+#   Attempt 1 → wait 2 s  after first failure
+#   Attempt 2 → wait 4 s  after second failure
+# After all attempts fail the existing _AI_FAILURE_FALLBACK is returned and
+# the failure is logged. Both the async and sync Groq call paths use retry.
+_MAX_RETRY_ATTEMPTS: int = 3
 
 # ---------------------------------------------------------------------------
 # Prompt template — DO NOT DEVIATE from this exact wording (CLAUDE.md §6.2)
@@ -92,6 +104,114 @@ def _get_groq_client() -> Groq:
             "GROQ_API_KEY is not set. Add it to your .env file."
         )
     return Groq(api_key=api_key)
+
+
+# ---------------------------------------------------------------------------
+# Rate-limit retry helpers (Phase 4)
+# ---------------------------------------------------------------------------
+
+
+def _call_groq_sync_with_retry(
+    prompt: str,
+    exam_id: int,
+    question_id: int,
+) -> str | None:
+    """
+    Call the Groq API (sync) with exponential backoff retry.
+
+    Attempts the call up to _MAX_RETRY_ATTEMPTS times. Before each retry
+    (not before the first attempt), sleeps for 2^attempt seconds:
+      Attempt 0 → immediate
+      Attempt 1 → sleep 2 s
+      Attempt 2 → sleep 4 s
+
+    Each failure is logged to audit_log with the attempt number.
+
+    Returns the raw response string on success, or None if all attempts fail.
+
+    NOTE: time.sleep() is permitted here. This function runs in a Streamlit
+    service thread (not a page render thread), so blocking it does not freeze
+    the UI. The no-sleep rule (CLAUDE.md §7.1) applies to Streamlit page
+    rendering only.
+    """
+    client = _get_groq_client()
+
+    for attempt in range(_MAX_RETRY_ATTEMPTS):
+        if attempt > 0:
+            delay = 2 ** attempt   # 2 s, 4 s
+            time.sleep(delay)
+
+        try:
+            chat_completion = client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                max_tokens=512,
+            )
+            return chat_completion.choices[0].message.content
+
+        except Exception as exc:  # noqa: BLE001
+            log_to_audit(
+                action=f"Groq API call failed (attempt {attempt + 1}/{_MAX_RETRY_ATTEMPTS})",
+                exam_id=exam_id,
+                details={
+                    "question_id": question_id,
+                    "attempt": attempt + 1,
+                    "max_attempts": _MAX_RETRY_ATTEMPTS,
+                    "error": str(exc),
+                    "will_retry": attempt < _MAX_RETRY_ATTEMPTS - 1,
+                },
+            )
+
+    return None   # all attempts exhausted
+
+
+async def _call_groq_async_with_retry(
+    prompt: str,
+    exam_id: int,
+    question_id: int,
+    student_id: str,
+    api_key: str,
+) -> str | None:
+    """
+    Call the Groq API (async) with exponential backoff retry.
+
+    Identical retry semantics to _call_groq_sync_with_retry but uses
+    asyncio.sleep() so other concurrent grading tasks continue while this
+    one is waiting — the semaphore slot is released between attempts.
+
+    Returns the raw response string on success, or None if all attempts fail.
+    """
+    for attempt in range(_MAX_RETRY_ATTEMPTS):
+        if attempt > 0:
+            delay = 2 ** attempt   # 2 s, 4 s
+            await asyncio.sleep(delay)
+
+        try:
+            async_client = AsyncGroq(api_key=api_key)
+            chat_completion = await async_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                max_tokens=512,
+            )
+            return chat_completion.choices[0].message.content
+
+        except Exception as exc:  # noqa: BLE001
+            log_to_audit(
+                action=f"Groq async API call failed (attempt {attempt + 1}/{_MAX_RETRY_ATTEMPTS})",
+                exam_id=exam_id,
+                details={
+                    "student_id": student_id,
+                    "question_id": question_id,
+                    "attempt": attempt + 1,
+                    "max_attempts": _MAX_RETRY_ATTEMPTS,
+                    "error": str(exc),
+                    "will_retry": attempt < _MAX_RETRY_ATTEMPTS - 1,
+                },
+            )
+
+    return None   # all attempts exhausted
 
 
 # ---------------------------------------------------------------------------
@@ -249,19 +369,11 @@ def grade_single_response(
         student_answer=sanitized_text,
     )
 
-    # Step 4 — call Groq API.
+    # Step 4 — call Groq API with exponential backoff retry (Phase 4).
     try:
-        client = _get_groq_client()
-        chat_completion = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.1,   # low temperature → more deterministic grading
-            max_tokens=512,    # feedback + JSON is well within this limit
-        )
-        raw_response = chat_completion.choices[0].message.content
-
+        raw_response = _call_groq_sync_with_retry(prompt, exam_id, question_id)
     except EnvironmentError as exc:
-        # Missing API key — configuration error, log and return fallback.
+        # Missing API key — configuration error, not retryable.
         log_to_audit(
             action="Groq API configuration error",
             exam_id=exam_id,
@@ -269,12 +381,8 @@ def grade_single_response(
         )
         return dict(_AI_FAILURE_FALLBACK)
 
-    except Exception as exc:  # noqa: BLE001 — intentional broad catch for API errors
-        log_to_audit(
-            action="Groq API call failed",
-            exam_id=exam_id,
-            details={"question_id": question_id, "error": str(exc)},
-        )
+    if raw_response is None:
+        # All retry attempts exhausted — each attempt was already logged.
         return dict(_AI_FAILURE_FALLBACK)
 
     # Step 5 — parse and validate.
@@ -322,7 +430,7 @@ async def _async_grade_single_response(
         student_answer=sanitized_text,
     )
 
-    # ── Step 4: call Groq API (rate-limited by semaphore) ─────────────────────
+    # ── Step 4: call Groq API with exponential backoff retry (Phase 4) ──────────
     api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
         log_to_audit(
@@ -334,30 +442,22 @@ async def _async_grade_single_response(
         result["question_id"] = question_id
         return result
 
+    # ── Step 4: call Groq API with exponential backoff retry (Phase 4) ──────────
+    # The retry helper uses asyncio.sleep() between attempts, releasing the
+    # event loop so other concurrent tasks can progress during the wait.
+    # The semaphore is held for the full retry sequence of one question —
+    # this is intentional: releasing it between attempts would allow a burst
+    # of new requests to pile in exactly when the API is already rate-limiting.
     async with semaphore:
-        try:
-            async_client = AsyncGroq(api_key=api_key)
-            chat_completion = await async_client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=512,
-            )
-            raw_response: str = chat_completion.choices[0].message.content
+        raw_response = await _call_groq_async_with_retry(
+            prompt, exam_id, question_id, student_id, api_key
+        )
 
-        except Exception as exc:  # noqa: BLE001 — intentional broad catch for API errors
-            log_to_audit(
-                action="Groq async API call failed",
-                exam_id=exam_id,
-                details={
-                    "student_id": student_id,
-                    "question_id": question_id,
-                    "error": str(exc),
-                },
-            )
-            result = dict(_AI_FAILURE_FALLBACK)
-            result["question_id"] = question_id
-            return result
+    if raw_response is None:
+        # All retry attempts exhausted — each attempt was already logged.
+        result = dict(_AI_FAILURE_FALLBACK)
+        result["question_id"] = question_id
+        return result
 
     # ── Step 5: parse and validate ────────────────────────────────────────────
     result = parse_ai_response(raw_response, max_marks, exam_id, question_id)

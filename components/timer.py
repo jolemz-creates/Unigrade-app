@@ -21,9 +21,20 @@ When time expires, render_timer() sets timer_expired = True and calls
 st.rerun() to trigger the auto-submit path in exam_hall.py immediately.
 """
 
+import time
 from datetime import datetime
 
 import streamlit as st
+
+from services.audit import log_to_audit
+
+# ── Focus-loss detection (Phase 4 — Option C) ─────────────────────────────────
+# If the gap between consecutive timer renders exceeds this threshold, we treat
+# it as a probable focus-loss event (tab hidden, laptop closed, alt-tabbed).
+#
+# Threshold = autosave_interval (30 s) + 15 s grace for slow networks / UI lag.
+# Set to 0 in tests by patching FOCUS_LOSS_THRESHOLD_SECONDS.
+FOCUS_LOSS_THRESHOLD_SECONDS: int = 45
 
 
 # ---------------------------------------------------------------------------
@@ -40,12 +51,26 @@ def render_timer() -> None:
       - Sets st.session_state.timer_expired = True
       - Calls st.rerun() to hand control back to exam_hall.py
 
+    Focus-loss detection (Phase 4 — Option C):
+      On each render, computes the wall-clock gap since the previous render.
+      A gap > FOCUS_LOSS_THRESHOLD_SECONDS during an active exam is logged to
+      audit_log as a probable focus-loss event. This detects tab switching,
+      laptop lid closes, and browser minimisation — all of which suppress
+      Streamlit reruns, creating a detectable silence in the render stream.
+
+      False-positive risk: a student who stops interacting entirely for >45 s
+      (e.g. thinking hard without typing) will also trigger this. The log entry
+      is advisory ("Possible focus loss") — it is not an automatic disqualifier.
+
     CLAUDE.md §7.1 — Never use time.sleep(). Never block.
     """
     end_time = st.session_state.get("exam_end_time")
 
     if end_time is None:
         return
+
+    # ── Focus-loss detection ──────────────────────────────────────────────────
+    _check_focus_loss()
 
     remaining_seconds = _compute_remaining(end_time)
 
@@ -76,6 +101,58 @@ def update_time_remaining() -> int:
     remaining = max(0, int(_compute_remaining(end_time)))
     st.session_state["time_remaining"] = remaining
     return remaining
+
+
+# ---------------------------------------------------------------------------
+# Focus-loss detection (Phase 4 — Option C)
+# ---------------------------------------------------------------------------
+
+def _check_focus_loss() -> None:
+    """
+    Detect probable focus-loss events by measuring the gap between renders.
+
+    Stores the wall-clock timestamp of each render in session state under
+    'last_timer_render'. On the next render, the gap is computed. If it
+    exceeds FOCUS_LOSS_THRESHOLD_SECONDS and the exam is active, a record
+    is written to audit_log.
+
+    Called only from render_timer(), which already guards on exam_end_time
+    being set — so this function only runs during an active exam session.
+
+    Rules:
+    - First render (last_timer_render == 0.0): stamp and return. No gap yet.
+    - Subsequent renders: compute gap, log if above threshold, then re-stamp.
+    - Never raises — swallows all exceptions so a logging failure cannot
+      interrupt the timer render or the exam session.
+    """
+    now: float = time.time()
+
+    # Initialise on first call (setdefault respects existing values).
+    st.session_state.setdefault("last_timer_render", 0.0)
+    last: float = st.session_state["last_timer_render"]
+
+    try:
+        if last != 0.0:
+            gap: float = now - last
+            if gap > FOCUS_LOSS_THRESHOLD_SECONDS:
+                user_id = st.session_state.get("user_id")
+                exam_id = st.session_state.get("active_exam_id")
+                log_to_audit(
+                    action="Possible focus loss detected",
+                    user_id=user_id,
+                    exam_id=exam_id,
+                    details={
+                        "gap_seconds": round(gap, 1),
+                        "threshold_seconds": FOCUS_LOSS_THRESHOLD_SECONDS,
+                        "detection_method": "timer_render_gap",
+                    },
+                )
+    except Exception:
+        # Never let a logging failure surface to the student UI.
+        pass
+    finally:
+        # Always update the stamp, even if the log call failed.
+        st.session_state["last_timer_render"] = now
 
 
 # ---------------------------------------------------------------------------
