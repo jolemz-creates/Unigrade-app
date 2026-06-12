@@ -94,7 +94,7 @@ test-results/
 # Generated result slips are runtime output, not source files.
 # =============================================================================
 *.pdf
-
+!Technical Research*.pdf
 
 # =============================================================================
 # LOGS & AUDIT EXPORTS
