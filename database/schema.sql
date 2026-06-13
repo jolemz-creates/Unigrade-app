@@ -89,13 +89,13 @@ CREATE TABLE IF NOT EXISTS questions (
 -- Format: YY/FFDDNNN e.g. "21/52CS001"
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS students (
-    matric_no   TEXT    PRIMARY KEY,
-    name        TEXT,
-    department  TEXT    NOT NULL,
-    level       INTEGER,                            -- 100, 200, 300, 400, 500
-    email       TEXT
+    matric_no       TEXT PRIMARY KEY,
+    name            TEXT,
+    department      TEXT NOT NULL,
+    level           INTEGER,
+    email           TEXT,
+    password_hash   TEXT                -- NULL until student sets password on first login
 );
-
 
 -- -----------------------------------------------------------------------------
 -- TABLE: student_responses

@@ -80,6 +80,17 @@ def get_connection() -> Iterator[sqlite3.Connection]:
     finally:
         conn.close()  # Always releases the file handle — critical on Windows
 
+def _migrate_db(conn: sqlite3.Connection) -> None:
+    """Apply incremental schema migrations to existing databases.
+    Safe to run on every startup — all migrations are idempotent.
+    """
+    # Migration: add password_hash to students if not present
+    existing_cols = {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(students)").fetchall()
+    }
+    if "password_hash" not in existing_cols:
+        conn.execute("ALTER TABLE students ADD COLUMN password_hash TEXT")
 
 def init_db() -> None:
     """
@@ -107,3 +118,4 @@ def init_db() -> None:
         # transaction managed by the context manager, which is fine here
         # because schema init is an administrative, not a data, operation.
         conn.executescript(schema_sql)
+        _migrate_db(conn)   

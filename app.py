@@ -302,6 +302,11 @@ def render_student_portal() -> None:
 
 def _render_student_nav() -> None:
     """Minimal top-bar for the student portal."""
+    st.markdown(
+        "<style>div.block-container{padding-top:3rem;}</style>",
+        unsafe_allow_html=True,
+    )
+
     col_name, col_results, col_logout = st.columns([3, 1, 1])
 
     with col_name:
